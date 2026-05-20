@@ -397,7 +397,10 @@ function AdminPage() {
                 <span>{formatNumber(item.totalUsdt, 2)}</span>
                 <span>{formatNumber(item.unsettledUsdt, 2)}</span>
                 <span>{formatNumber(item.unsettledCommissionUsdt, 2)} USDT</span>
-                <button className="small-action" onClick={() => openDetail(item.code, auth)}>查看</button>
+                <span className="action-group">
+                  <button className="small-action" onClick={() => openDetail(item.code, auth)}>查看</button>
+                  <button className="small-action secondary" onClick={() => copyText(referralByCode.get(item.code)?.url || '')}>复制链接</button>
+                </span>
               </div>
             ))}
           </div>
@@ -412,7 +415,7 @@ function AdminPage() {
             const settledUsdt = item.totalUsdt - item.unsettledUsdt;
             const settledCommission = item.commissionUsdt - item.unsettledCommissionUsdt;
             return (
-              <button className="referral-stat-card" key={item.code} onClick={() => openDetail(item.code, auth)}>
+              <div className="referral-stat-card" key={item.code}>
                 <div className="stat-card-head">
                   <span>推荐人地址</span>
                   <strong title={item.referrerWallet || item.name}>{item.referrerWallet || item.name}</strong>
@@ -425,6 +428,10 @@ function AdminPage() {
                   <span>专属链接</span>
                   <strong>{referral?.url || '-'}</strong>
                 </div>
+                <div className="stat-actions">
+                  <button className="small-action" onClick={() => openDetail(item.code, auth)}>查看详情</button>
+                  <button className="small-action secondary" onClick={() => copyText(referral?.url || '')}>复制专属链接</button>
+                </div>
                 <div className="stat-metrics">
                   <Metric label="购买人数" value={`${item.wallets}`} />
                   <Metric label="买入次数" value={`${item.tradeCount}`} />
@@ -435,7 +442,7 @@ function AdminPage() {
                   <Metric label="已结算佣金" value={`${formatNumber(settledCommission, 2)} USDT`} />
                   <Metric label="总佣金1%" value={`${formatNumber(item.commissionUsdt, 2)} USDT`} />
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -459,6 +466,11 @@ function AdminPage() {
 function openDetail(code: string, auth: string) {
   if (auth) localStorage.setItem('swap.adminPassword', auth);
   window.location.href = `/admin/ref/${encodeURIComponent(code)}`;
+}
+
+async function copyText(value: string) {
+  if (!value) return;
+  await navigator.clipboard.writeText(value);
 }
 
 function AdminDetailPage({ code }: { code: string }) {

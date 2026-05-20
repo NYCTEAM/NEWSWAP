@@ -352,6 +352,18 @@ h2 {
   font-weight: 700;
 }
 
+.small-action.secondary {
+  border-color: #cfdad3;
+  color: #24352c;
+}
+
+.action-group,
+.stat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .row.header {
   color: #607268;
   font-size: 12px;
@@ -471,6 +483,10 @@ h2 {
 .stat-card-link strong {
   color: #24352c;
   font-size: 13px;
+}
+
+.stat-actions {
+  margin: 10px 0 12px;
 }
 
 .stat-metrics {
