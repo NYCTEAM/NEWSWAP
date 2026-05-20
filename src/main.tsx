@@ -325,7 +325,7 @@ function SwapPage({ config }: { config: AppConfig }) {
 }
 
 function AdminPage() {
-  const [password, setPassword] = useState(localStorage.getItem('swap.adminPassword') || '');
+  const [password, setPassword] = useState('');
   const [referrals, setReferrals] = useState<Referral[]>([]);
   const [summary, setSummary] = useState<SummaryRow[]>([]);
   const [referrerWallet, setReferrerWallet] = useState('');
@@ -333,13 +333,16 @@ function AdminPage() {
   const [status, setStatus] = useState('');
   const auth = password.trim();
 
+  useEffect(() => {
+    localStorage.removeItem('swap.adminPassword');
+  }, []);
+
   async function refresh() {
     if (!auth) {
       setStatus('请输入管理员密码后刷新。');
       return;
     }
     setStatus('');
-    localStorage.setItem('swap.adminPassword', auth);
     const [refData, statsData] = await Promise.all([
       apiJson<{ referrals: Referral[] }>('/api/referrals', undefined, auth),
       apiJson<{ summary: SummaryRow[] }>('/api/stats', undefined, auth)
@@ -378,7 +381,7 @@ function AdminPage() {
           <h2><Link2 size={18} /> 创建专属链接</h2>
           <form onSubmit={(event) => { event.preventDefault(); createReferral(); }}>
             <input className="hidden-field" value="admin" readOnly autoComplete="username" aria-hidden="true" tabIndex={-1} />
-            <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="管理员密码" type="password" autoComplete="current-password" />
+            <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="管理员密码" type="password" autoComplete="new-password" name="admin-password" />
             <input value={referrerWallet} onChange={(event) => setReferrerWallet(event.target.value)} placeholder="推荐人钱包地址" />
             <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="推荐码，可留空自动生成" />
             <button className="primary" type="submit">创建链接</button>
@@ -464,7 +467,6 @@ function AdminPage() {
 }
 
 function openDetail(code: string, auth: string) {
-  if (auth) localStorage.setItem('swap.adminPassword', auth);
   window.location.href = `/admin/ref/${encodeURIComponent(code)}`;
 }
 
@@ -474,10 +476,14 @@ async function copyText(value: string) {
 }
 
 function AdminDetailPage({ code }: { code: string }) {
-  const [password, setPassword] = useState(localStorage.getItem('swap.adminPassword') || '');
+  const [password, setPassword] = useState('');
   const [detail, setDetail] = useState<ReferralDetail | null>(null);
   const [status, setStatus] = useState('');
   const auth = password.trim();
+
+  useEffect(() => {
+    localStorage.removeItem('swap.adminPassword');
+  }, []);
 
   async function loadDetail() {
     if (!auth) {
@@ -485,7 +491,6 @@ function AdminDetailPage({ code }: { code: string }) {
       return;
     }
     setStatus('');
-    localStorage.setItem('swap.adminPassword', auth);
     setDetail(await apiJson<ReferralDetail>(`/api/referrals/${encodeURIComponent(code)}/detail`, undefined, auth));
   }
 
@@ -528,7 +533,7 @@ function AdminDetailPage({ code }: { code: string }) {
             <p>推荐码: {code}</p>
           </div>
           <div className="detail-password">
-            <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="管理员密码" type="password" autoComplete="current-password" />
+            <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="管理员密码" type="password" autoComplete="new-password" name="admin-detail-password" />
             <button className="primary" onClick={loadDetail}>加载详情</button>
           </div>
         </div>
