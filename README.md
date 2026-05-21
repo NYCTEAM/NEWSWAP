@@ -55,6 +55,8 @@ USDT_ADDRESS=0x55d398326f99059fF775485246999027B3197955
 TARGET_TOKEN_ADDRESS=0x6cBf442EaA9539Ff93ba2dd7726933bB7b66FeeD
 TARGET_TOKEN_DISPLAY=0x6cBf442EaA9539Ff93ba2dd7726933bB7b66FeeD
 COMMISSION_RATE=0.01
+BUY_SYNC_BLOCKS=200000
+BUY_SYNC_CHUNK=5000
 ```
 
 统计数据写入容器内 `/app/data/stats.json`。生产环境建议在 Coolify 给 `/app/data` 挂载持久化存储，否则重新部署容器可能丢失统计数据。
@@ -82,3 +84,5 @@ npm start
 统计数据保存在 `data/stats.json`。前台通过推荐链接进入后会保存 `ref`，钱包连接后绑定钱包；买入交易确认后记录 `txHash`、钱包、USDT 数量和代币数量。卖出交易不会进入推广统计。
 
 当前版本是前台交易完成后的应用内统计，不是全链上索引器。如果有人绕过这个页面直接去 PancakeSwap 买卖，不会自动进入统计。
+
+详情页和前台推荐统计会自动从 Pancake Pair 补扫最近 `BUY_SYNC_BLOCKS` 个区块内、已绑定推荐链接钱包的买入交易，用于修复前端上报失败或刷新关闭造成的漏记。默认约最近 7 天，可按 RPC 能力调大或调小。

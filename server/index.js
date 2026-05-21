@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { ethers } from 'ethers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -20,7 +21,8 @@ const defaultDb = {
   referrals: [],
   walletBindings: [],
   trades: [],
-  settlements: []
+  settlements: [],
+  chainSync: {}
 };
 
 async function readDb() {
@@ -74,6 +76,54 @@ function normalizeReferral(referral) {
 }
 
 const commissionRate = Number(process.env.COMMISSION_RATE || 0.01);
+const chainSyncBlocks = Number(process.env.BUY_SYNC_BLOCKS || 200000);
+const chainSyncChunk = Number(process.env.BUY_SYNC_CHUNK || 5000);
+
+const routerAbi = ['function factory() view returns (address)'];
+const factoryAbi = ['function getPair(address,address) view returns (address)'];
+const pairAbi = [
+  'event Swap(address indexed sender,uint256 amount0In,uint256 amount1In,uint256 amount0Out,uint256 amount1Out,address indexed to)',
+  'function token0() view returns (address)',
+  'function token1() view returns (address)'
+];
+
+let pairContextPromise;
+
+function chainConfig() {
+  return {
+    rpcUrl: process.env.RPC_URL || 'https://bsc-dataseed.binance.org',
+    routerAddress: (process.env.ROUTER_ADDRESS || '0x10ED43C718714eb63d5aA57B78B54704E256024E').toLowerCase(),
+    usdtAddress: (process.env.USDT_ADDRESS || '0x55d398326f99059fF775485246999027B3197955').toLowerCase(),
+    targetTokenAddress: (process.env.TARGET_TOKEN_ADDRESS || '0x6cBf442EaA9539Ff93ba2dd7726933bB7b66FeeD').toLowerCase()
+  };
+}
+
+async function getPairContext() {
+  if (pairContextPromise) return pairContextPromise;
+  pairContextPromise = (async () => {
+    const config = chainConfig();
+    const provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    const router = new ethers.Contract(config.routerAddress, routerAbi, provider);
+    const factoryAddress = await router.factory();
+    const factory = new ethers.Contract(factoryAddress, factoryAbi, provider);
+    const pairAddress = await factory.getPair(config.usdtAddress, config.targetTokenAddress);
+    if (pairAddress === ethers.ZeroAddress) throw new Error('Pancake pair not found');
+    const pair = new ethers.Contract(pairAddress, pairAbi, provider);
+    const [token0, token1] = await Promise.all([pair.token0(), pair.token1()]);
+    const iface = new ethers.Interface(pairAbi);
+    return {
+      provider,
+      iface,
+      pairAddress,
+      token0: token0.toLowerCase(),
+      token1: token1.toLowerCase(),
+      usdtAddress: config.usdtAddress,
+      targetTokenAddress: config.targetTokenAddress,
+      swapTopic: ethers.id('Swap(address,uint256,uint256,uint256,uint256,address)')
+    };
+  })();
+  return pairContextPromise;
+}
 
 function tradeVolume(trade) {
   if (trade.side !== 'buy') return 0;
@@ -82,6 +132,72 @@ function tradeVolume(trade) {
 
 function isTradeSettled(db, tradeId) {
   return db.settlements.some((settlement) => Array.isArray(settlement.tradeIds) && settlement.tradeIds.includes(tradeId));
+}
+
+async function syncReferralBuys(db, code) {
+  if (String(process.env.DISABLE_BUY_SYNC || '').toLowerCase() === 'true') return { added: 0, skipped: true };
+  const bindings = db.walletBindings.filter((binding) => binding.ref === code);
+  if (bindings.length === 0) return { added: 0, skipped: true };
+
+  const wallets = new Set(bindings.map((binding) => binding.wallet));
+  const boundAt = new Map(bindings.map((binding) => [binding.wallet, Date.parse(binding.createdAt || '0') || 0]));
+  const context = await getPairContext();
+  const latestBlock = await context.provider.getBlockNumber();
+  db.chainSync ||= {};
+  const previous = Number(db.chainSync[code]?.lastBlock || 0);
+  const fromBlock = Math.max(0, previous ? previous - 200 : latestBlock - chainSyncBlocks);
+  const usdtIsToken0 = context.token0 === context.usdtAddress;
+  const existingHashes = new Set(db.trades.map((trade) => trade.txHash));
+  const blockTimeCache = new Map();
+  let added = 0;
+
+  for (let start = fromBlock; start <= latestBlock; start += chainSyncChunk) {
+    const end = Math.min(latestBlock, start + chainSyncChunk - 1);
+    const logs = await context.provider.getLogs({
+      address: context.pairAddress,
+      fromBlock: start,
+      toBlock: end,
+      topics: [context.swapTopic]
+    });
+
+    for (const log of logs) {
+      if (existingHashes.has(log.transactionHash.toLowerCase())) continue;
+      const parsed = context.iface.parseLog(log);
+      const buyer = normalizeAddress(parsed.args.to);
+      if (!wallets.has(buyer)) continue;
+
+      const amountUsdtIn = usdtIsToken0 ? parsed.args.amount0In : parsed.args.amount1In;
+      const amountTokenOut = usdtIsToken0 ? parsed.args.amount1Out : parsed.args.amount0Out;
+      if (amountUsdtIn <= 0n || amountTokenOut <= 0n) continue;
+
+      let blockTime = blockTimeCache.get(log.blockNumber);
+      if (!blockTime) {
+        const block = await context.provider.getBlock(log.blockNumber);
+        blockTime = Number(block?.timestamp || 0) * 1000;
+        blockTimeCache.set(log.blockNumber, blockTime);
+      }
+      const walletBoundAt = boundAt.get(buyer) || 0;
+      if (walletBoundAt && blockTime + 300000 < walletBoundAt) continue;
+
+      db.trades.push({
+        id: randomUUID(),
+        ref: code,
+        wallet: buyer,
+        side: 'buy',
+        txHash: log.transactionHash.toLowerCase(),
+        usdtAmount: Number(ethers.formatUnits(amountUsdtIn, 18)),
+        tokenAmount: ethers.formatUnits(amountTokenOut, 18),
+        createdAt: new Date(blockTime || Date.now()).toISOString(),
+        source: 'chain-sync',
+        blockNumber: log.blockNumber
+      });
+      existingHashes.add(log.transactionHash.toLowerCase());
+      added += 1;
+    }
+  }
+
+  db.chainSync[code] = { lastBlock: latestBlock, updatedAt: nowIso(), added };
+  return { added, latestBlock };
 }
 
 function summarize(db) {
@@ -288,6 +404,13 @@ app.get('/api/referral-public-stats', async (req, res, next) => {
     const db = await readDb();
     const referral = db.referrals.find((item) => item.code === ref);
     if (!referral) return res.status(404).json({ error: 'Referral not found' });
+    let sync = { added: 0 };
+    try {
+      sync = await syncReferralBuys(db, ref);
+      if (sync.added > 0) await writeDb(db);
+    } catch (error) {
+      sync = { added: 0, error: error.message };
+    }
 
     const trades = db.trades.filter((trade) => trade.ref === ref && trade.side === 'buy');
     const buyerWallets = new Set(trades.map((trade) => trade.wallet));
@@ -298,7 +421,8 @@ app.get('/api/referral-public-stats', async (req, res, next) => {
       name: referral.name,
       buyerCount: buyerWallets.size,
       buyCount: trades.length,
-      totalBuyUsdt
+      totalBuyUsdt,
+      sync
     });
   } catch (error) {
     next(error);
@@ -352,9 +476,16 @@ app.get('/api/referrals/:code/detail', async (req, res, next) => {
   try {
     const db = await readDb();
     const code = String(req.params.code || '').trim().toLowerCase();
+    let sync = { added: 0 };
+    try {
+      sync = await syncReferralBuys(db, code);
+      if (sync.added > 0) await writeDb(db);
+    } catch (error) {
+      sync = { added: 0, error: error.message };
+    }
     const detail = referralDetail(db, code);
     if (!detail) return res.status(404).json({ error: 'Referral not found' });
-    res.json({ ...detail, commissionRate });
+    res.json({ ...detail, commissionRate, sync });
   } catch (error) {
     next(error);
   }
