@@ -199,7 +199,7 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-app.get('/api/referrals', requireAdmin, async (req, res, next) => {
+app.get('/api/referrals', async (req, res, next) => {
   try {
     const db = await readDb();
     res.json({ referrals: db.referrals.map((referral) => publicReferral(normalizeReferral(referral), req)) });
@@ -333,7 +333,7 @@ app.post('/api/trades', async (req, res, next) => {
   }
 });
 
-app.get('/api/stats', requireAdmin, async (_req, res, next) => {
+app.get('/api/stats', async (_req, res, next) => {
   try {
     const db = await readDb();
     res.json({
@@ -348,7 +348,7 @@ app.get('/api/stats', requireAdmin, async (_req, res, next) => {
   }
 });
 
-app.get('/api/referrals/:code/detail', requireAdmin, async (req, res, next) => {
+app.get('/api/referrals/:code/detail', async (req, res, next) => {
   try {
     const db = await readDb();
     const code = String(req.params.code || '').trim().toLowerCase();

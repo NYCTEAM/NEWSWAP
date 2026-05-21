@@ -415,14 +415,16 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.detail-password {
+.detail-password,
+.settle-box {
   width: min(360px, 100%);
   display: grid;
   grid-template-columns: 1fr 120px;
   gap: 8px;
 }
 
-.detail-password input {
+.detail-password input,
+.settle-box input {
   width: 100%;
   padding: 12px;
   border: 1px solid #d4ded8;
@@ -594,7 +596,8 @@ h2 {
     flex-direction: column;
   }
 
-  .detail-password {
+  .detail-password,
+  .settle-box {
     grid-template-columns: 1fr;
   }
 

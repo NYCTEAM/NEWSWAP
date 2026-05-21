@@ -338,14 +338,10 @@ function AdminPage() {
   }, []);
 
   async function refresh() {
-    if (!auth) {
-      setStatus('请输入管理员密码后刷新。');
-      return;
-    }
     setStatus('');
     const [refData, statsData] = await Promise.all([
-      apiJson<{ referrals: Referral[] }>('/api/referrals', undefined, auth),
-      apiJson<{ summary: SummaryRow[] }>('/api/stats', undefined, auth)
+      apiJson<{ referrals: Referral[] }>('/api/referrals'),
+      apiJson<{ summary: SummaryRow[] }>('/api/stats')
     ]);
     setReferrals(refData.referrals);
     setSummary(statsData.summary);
@@ -486,16 +482,12 @@ function AdminDetailPage({ code }: { code: string }) {
   }, []);
 
   async function loadDetail() {
-    if (!auth) {
-      setStatus('请输入管理员密码后刷新。');
-      return;
-    }
     setStatus('');
-    setDetail(await apiJson<ReferralDetail>(`/api/referrals/${encodeURIComponent(code)}/detail`, undefined, auth));
+    setDetail(await apiJson<ReferralDetail>(`/api/referrals/${encodeURIComponent(code)}/detail`));
   }
 
   useEffect(() => {
-    if (auth) loadDetail().catch((error) => setStatus(error.message));
+    loadDetail().catch((error) => setStatus(error.message));
   }, [code]);
 
   async function settleSelected() {
@@ -532,10 +524,6 @@ function AdminDetailPage({ code }: { code: string }) {
             <p>推荐人地址: {detail?.referral.referrerWallet || detail?.referral.name || '-'}</p>
             <p>推荐码: {code}</p>
           </div>
-          <div className="detail-password">
-            <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="管理员密码" type="password" autoComplete="new-password" name="admin-detail-password" />
-            <button className="primary" onClick={loadDetail}>加载详情</button>
-          </div>
         </div>
         {status && <div className="status">{status}</div>}
       </section>
@@ -544,7 +532,10 @@ function AdminDetailPage({ code }: { code: string }) {
         <section className="admin-card full compact-card">
           <div className="detail-head">
             <h2>统计分类</h2>
-            <button className="icon-text" onClick={settleSelected}>结算本轮 1%</button>
+            <div className="settle-box">
+              <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="管理员密码，仅结算需要" type="password" autoComplete="new-password" name="settle-admin-password" />
+              <button className="icon-text" onClick={settleSelected}>结算本轮 1%</button>
+            </div>
           </div>
           <div className="metric-grid">
             <Metric label="推荐人数" value={`${summary.wallets}`} />
