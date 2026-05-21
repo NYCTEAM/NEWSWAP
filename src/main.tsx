@@ -472,10 +472,8 @@ async function copyText(value: string) {
 }
 
 function AdminDetailPage({ code }: { code: string }) {
-  const [password, setPassword] = useState('');
   const [detail, setDetail] = useState<ReferralDetail | null>(null);
   const [status, setStatus] = useState('');
-  const auth = password.trim();
 
   useEffect(() => {
     localStorage.removeItem('swap.adminPassword');
@@ -492,9 +490,11 @@ function AdminDetailPage({ code }: { code: string }) {
 
   async function settleSelected() {
     if (!detail) return;
+    const password = window.prompt('请输入管理员密码进行结算');
+    if (!password) return;
     try {
       setStatus('');
-      await apiJson(`/api/referrals/${encodeURIComponent(detail.referral.code)}/settlements`, { method: 'POST', body: JSON.stringify({}) }, auth);
+      await apiJson(`/api/referrals/${encodeURIComponent(detail.referral.code)}/settlements`, { method: 'POST', body: JSON.stringify({}) }, password.trim());
       await loadDetail();
       setStatus('本轮已结算，新交易会进入下一轮未结算统计。');
     } catch (error) {
@@ -532,10 +532,7 @@ function AdminDetailPage({ code }: { code: string }) {
         <section className="admin-card full compact-card">
           <div className="detail-head">
             <h2>统计分类</h2>
-            <div className="settle-box">
-              <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="管理员密码，仅结算需要" type="password" autoComplete="new-password" name="settle-admin-password" />
-              <button className="icon-text" onClick={settleSelected}>结算本轮 1%</button>
-            </div>
+            <button className="icon-text" onClick={settleSelected}>结算本轮 1%</button>
           </div>
           <div className="metric-grid">
             <Metric label="推荐人数" value={`${summary.wallets}`} />
