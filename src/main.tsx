@@ -10,6 +10,7 @@ type AppConfig = {
   rpcUrl: string;
   routerAddress: string;
   usdtAddress: string;
+  wbnbAddress: string;
   targetTokenAddress: string;
   targetTokenDisplay: string;
   defaultSlippageBps: number;
@@ -104,12 +105,15 @@ const erc20Abi = [
   'function decimals() view returns (uint8)',
   'function symbol() view returns (string)',
   'function allowance(address,address) view returns (uint256)',
+  'function balanceOf(address) view returns (uint256)',
   'function approve(address,uint256) returns (bool)'
 ];
 
 const routerAbi = [
   'function getAmountsOut(uint256 amountIn,address[] path) view returns (uint256[] amounts)',
-  'function swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)'
+  'function swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)',
+  'function swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin,address[] path,address to,uint256 deadline) payable',
+  'function swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)'
 ];
 
 function formatNumber(value: number, fraction = 4) {
@@ -185,6 +189,8 @@ function App() {
 function SwapPage({ config }: { config: AppConfig }) {
   const [wallet, setWallet] = useState('');
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
+  const [buyToken, setBuyToken] = useState<'USDT' | 'BNB'>('USDT');
+  const [sellToken, setSellToken] = useState<'USDT' | 'BNB'>('USDT');
   const [amount, setAmount] = useState('');
   const [quote, setQuote] = useState('');
   const [tokenSymbol, setTokenSymbol] = useState('TOKEN');
@@ -194,11 +200,24 @@ function SwapPage({ config }: { config: AppConfig }) {
   const [status, setStatus] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const [refStats, setRefStats] = useState<ReferralPublicStats | null>(null);
+  const [balances, setBalances] = useState({ usdt: '0', bnb: '0', token: '0' });
   const ref = useMemo(currentRef, []);
   const provider = useMemo(() => new ethers.JsonRpcProvider(config.rpcUrl), [config.rpcUrl]);
+  const inputAsset = side === 'buy' ? buyToken : tokenSymbol;
+  const outputAsset = side === 'buy' ? tokenSymbol : sellToken;
+  const inputDecimals = side === 'buy' ? (buyToken === 'BNB' ? 18 : usdtDecimals) : tokenDecimals;
+  const outputDecimals = side === 'buy' ? tokenDecimals : (sellToken === 'BNB' ? 18 : usdtDecimals);
+  const inputBalance = side === 'buy' ? (buyToken === 'BNB' ? balances.bnb : balances.usdt) : balances.token;
   const path = useMemo(
-    () => side === 'buy' ? [config.usdtAddress, config.targetTokenAddress] : [config.targetTokenAddress, config.usdtAddress],
-    [config.targetTokenAddress, config.usdtAddress, side]
+    () => {
+      if (side === 'buy') {
+        if (buyToken === 'BNB') return [config.wbnbAddress, config.usdtAddress, config.targetTokenAddress];
+        return [config.usdtAddress, config.targetTokenAddress];
+      }
+      if (sellToken === 'BNB') return [config.targetTokenAddress, config.usdtAddress, config.wbnbAddress];
+      return [config.targetTokenAddress, config.usdtAddress];
+    },
+    [buyToken, config.targetTokenAddress, config.usdtAddress, config.wbnbAddress, sellToken, side]
   );
 
   const loadTokenInfo = useCallback(async () => {
@@ -224,6 +243,28 @@ function SwapPage({ config }: { config: AppConfig }) {
     loadReferralStats().catch(() => undefined);
   }, [ref]);
 
+  const loadBalances = useCallback(async (address: string) => {
+    if (!address) return;
+    const balanceProvider = window.ethereum ? new ethers.BrowserProvider(window.ethereum) : provider;
+    const usdt = new ethers.Contract(config.usdtAddress, erc20Abi, balanceProvider);
+    const token = new ethers.Contract(config.targetTokenAddress, erc20Abi, balanceProvider);
+    const [bnbBalance, usdtBalance, tokenBalance] = await Promise.all([
+      balanceProvider.getBalance(address),
+      usdt.balanceOf(address).catch(() => 0n),
+      token.balanceOf(address).catch(() => 0n)
+    ]);
+    setBalances({
+      bnb: ethers.formatUnits(bnbBalance, 18),
+      usdt: ethers.formatUnits(usdtBalance, usdtDecimals),
+      token: ethers.formatUnits(tokenBalance, tokenDecimals)
+    });
+  }, [config.targetTokenAddress, config.usdtAddress, provider, tokenDecimals, usdtDecimals]);
+
+  useEffect(() => {
+    if (!wallet) return;
+    loadBalances(wallet).catch(() => undefined);
+  }, [loadBalances, wallet]);
+
   useEffect(() => {
     let cancelled = false;
     async function loadQuote() {
@@ -232,11 +273,9 @@ function SwapPage({ config }: { config: AppConfig }) {
         return;
       }
       try {
-        const decimalsIn = side === 'buy' ? usdtDecimals : tokenDecimals;
-        const decimalsOut = side === 'buy' ? tokenDecimals : usdtDecimals;
         const router = new ethers.Contract(config.routerAddress, routerAbi, provider);
-        const amounts = await router.getAmountsOut(ethers.parseUnits(amount, decimalsIn), path);
-        if (!cancelled) setQuote(ethers.formatUnits(amounts[1], decimalsOut));
+        const amounts = await router.getAmountsOut(ethers.parseUnits(amount, inputDecimals), path);
+        if (!cancelled) setQuote(ethers.formatUnits(amounts[amounts.length - 1], outputDecimals));
       } catch {
         if (!cancelled) setQuote('');
       }
@@ -246,7 +285,7 @@ function SwapPage({ config }: { config: AppConfig }) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [amount, config.routerAddress, path, provider, side, tokenDecimals, usdtDecimals]);
+  }, [amount, config.routerAddress, inputDecimals, outputDecimals, path, provider]);
 
   async function connectWallet() {
     if (!window.ethereum) throw new Error('Wallet not found');
@@ -254,6 +293,7 @@ function SwapPage({ config }: { config: AppConfig }) {
     const accounts = (await window.ethereum.request({ method: 'eth_requestAccounts' })) as string[];
     const address = accounts[0] || '';
     setWallet(address);
+    await loadBalances(address).catch(() => undefined);
     if (ref) {
       await apiJson('/api/bind-wallet', { method: 'POST', body: JSON.stringify({ wallet: address, ref }) }).catch(() => undefined);
       await loadReferralStats().catch(() => undefined);
@@ -290,28 +330,35 @@ function SwapPage({ config }: { config: AppConfig }) {
       await apiJson('/api/bind-wallet', { method: 'POST', body: JSON.stringify({ wallet: address, ref }) });
       await loadReferralStats().catch(() => undefined);
 
-      const decimalsIn = side === 'buy' ? usdtDecimals : tokenDecimals;
-      const decimalsOut = side === 'buy' ? tokenDecimals : usdtDecimals;
-      const amountIn = ethers.parseUnits(amount, decimalsIn);
+      const amountIn = ethers.parseUnits(amount, inputDecimals);
       const router = new ethers.Contract(config.routerAddress, routerAbi, signer);
       const amounts = await router.getAmountsOut(amountIn, path);
-      const minimumOut = (amounts[1] * BigInt(10000 - slippageBps)) / 10000n;
-      const inputToken = side === 'buy' ? config.usdtAddress : config.targetTokenAddress;
+      const outputAmount = amounts[amounts.length - 1];
+      const minimumOut = (outputAmount * BigInt(10000 - slippageBps)) / 10000n;
+      const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+      let tx: ethers.TransactionResponse;
 
-      await ensureAllowance(inputToken, signer, address, amountIn);
-      setStatus('交易提交中...');
-      const tx = await router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-        amountIn,
-        minimumOut,
-        path,
-        address,
-        Math.floor(Date.now() / 1000) + 60 * 20
-      );
+      if (side === 'buy' && buyToken === 'BNB') {
+        setStatus('交易提交中...');
+        tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(minimumOut, path, address, deadline, { value: amountIn });
+      } else {
+        const inputToken = side === 'buy' ? config.usdtAddress : config.targetTokenAddress;
+        await ensureAllowance(inputToken, signer, address, amountIn);
+        setStatus('交易提交中...');
+        if (side === 'sell' && sellToken === 'BNB') {
+          tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(amountIn, minimumOut, path, address, deadline);
+        } else {
+          tx = await router.swapExactTokensForTokensSupportingFeeOnTransferTokens(amountIn, minimumOut, path, address, deadline);
+        }
+      }
       setStatus(`等待确认: ${tx.hash}`);
 
       if (side === 'buy') {
-        const usdtAmount = Number(amount);
-        const tokenAmount = ethers.formatUnits(amounts[1], decimalsOut);
+        let usdtAmount = Number(amount);
+        if (buyToken === 'BNB') {
+          usdtAmount = Number(ethers.formatUnits(amounts[1], usdtDecimals));
+        }
+        const tokenAmount = ethers.formatUnits(outputAmount, outputDecimals);
         const pendingBuy: PendingBuy = { wallet: address, ref, side, txHash: tx.hash, usdtAmount, tokenAmount };
         savePendingBuy(pendingBuy);
         await apiJson('/api/trades/pending', { method: 'POST', body: JSON.stringify(pendingBuy) }).catch(() => undefined);
@@ -319,9 +366,11 @@ function SwapPage({ config }: { config: AppConfig }) {
         await apiJson('/api/trades', { method: 'POST', body: JSON.stringify(pendingBuy) });
         removePendingBuy(tx.hash);
         await loadReferralStats().catch(() => undefined);
+        await loadBalances(address).catch(() => undefined);
         setStatus('买入完成，推广统计已记录。');
       } else {
         await tx.wait();
+        await loadBalances(address).catch(() => undefined);
         setStatus('卖出完成，卖出交易不参与推广统计。');
       }
     } catch (error) {
@@ -331,8 +380,16 @@ function SwapPage({ config }: { config: AppConfig }) {
     }
   }
 
-  const fromLabel = side === 'buy' ? 'USDT' : tokenSymbol;
-  const toLabel = side === 'buy' ? tokenSymbol : 'USDT';
+  function setPercentAmount(percent: number) {
+    let available = Number(inputBalance || 0);
+    if (!Number.isFinite(available) || available <= 0) {
+      setAmount('');
+      return;
+    }
+    if (side === 'buy' && buyToken === 'BNB') available = Math.max(0, available - 0.005);
+    const nextAmount = (available * percent) / 100;
+    setAmount(nextAmount.toFixed(inputAsset === 'BNB' ? 6 : 8).replace(/\.?0+$/, ''));
+  }
 
   return (
     <main className="swap-shell">
@@ -349,9 +406,31 @@ function SwapPage({ config }: { config: AppConfig }) {
           <button className={side === 'buy' ? 'active' : ''} onClick={() => setSide('buy')}>买入</button>
           <button className={side === 'sell' ? 'active' : ''} onClick={() => setSide('sell')}>卖出</button>
         </div>
-        <label className="amount-box"><span>支付 {fromLabel}</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0.0" /></label>
+        <div className="asset-switch">
+          {(side === 'buy' ? ['USDT', 'BNB'] : ['USDT', 'BNB']).map((asset) => (
+            <button
+              key={asset}
+              className={(side === 'buy' ? buyToken : sellToken) === asset ? 'active' : ''}
+              onClick={() => side === 'buy' ? setBuyToken(asset as 'USDT' | 'BNB') : setSellToken(asset as 'USDT' | 'BNB')}
+            >
+              {side === 'buy' ? `用 ${asset} 买` : `卖到 ${asset}`}
+            </button>
+          ))}
+        </div>
+        <div className="balance-strip">
+          <span>BNB {formatNumber(Number(balances.bnb), 6)}</span>
+          <span>USDT {formatNumber(Number(balances.usdt), 4)}</span>
+          <span>{tokenSymbol} {formatNumber(Number(balances.token), 4)}</span>
+        </div>
+        <label className="amount-box">
+          <span>{side === 'buy' ? '支付' : '卖出'} {inputAsset} · 余额 {formatNumber(Number(inputBalance), inputAsset === 'BNB' ? 6 : 4)}</span>
+          <input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0.0" />
+        </label>
+        <div className="quick-row">
+          {[10, 25, 50, 100].map((percent) => <button key={percent} onClick={() => setPercentAmount(percent)}>{percent}%</button>)}
+        </div>
         <div className="swap-arrow"><ArrowDownUp size={20} /></div>
-        <div className="amount-box output"><span>预计获得 {toLabel}</span><strong>{quote ? formatNumber(Number(quote), 8) : '0'}</strong></div>
+        <div className="amount-box output"><span>预计获得 {outputAsset}</span><strong>{quote ? formatNumber(Number(quote), 8) : '0'}</strong></div>
         <label className="slippage"><span>滑点 {slippageBps / 100}%</span><input type="range" min="10" max="500" step="10" value={slippageBps} onChange={(event) => setSlippageBps(Number(event.target.value))} /></label>
         <button className="primary" onClick={executeSwap} disabled={isBusy}>{isBusy ? '处理中...' : `${side === 'buy' ? '买入' : '卖出'} ${tokenSymbol}`}</button>
         <div className="ref-card">

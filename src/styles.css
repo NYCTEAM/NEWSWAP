@@ -152,6 +152,56 @@ h2 {
   box-shadow: 0 1px 8px rgba(23, 32, 27, 0.1);
 }
 
+.asset-switch,
+.quick-row,
+.balance-strip {
+  display: grid;
+  gap: 8px;
+}
+
+.asset-switch {
+  grid-template-columns: 1fr 1fr;
+  margin-top: 12px;
+}
+
+.asset-switch button,
+.quick-row button {
+  border: 1px solid #d5dfd9;
+  border-radius: 8px;
+  background: white;
+  color: #17201b;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.asset-switch button {
+  padding: 10px;
+}
+
+.asset-switch .active {
+  border-color: #277557;
+  background: #edf8f2;
+  color: #0f5d3e;
+}
+
+.balance-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+  color: #607268;
+  font-size: 12px;
+}
+
+.balance-strip span {
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px;
+  border: 1px solid #d8e2db;
+  border-radius: 8px;
+  background: #f7faf8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .amount-box {
   display: block;
   margin-top: 14px;
@@ -176,6 +226,15 @@ h2 {
   margin-top: 8px;
   overflow-wrap: anywhere;
   font-size: 30px;
+}
+
+.quick-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.quick-row button {
+  padding: 8px 6px;
 }
 
 .swap-arrow {

@@ -377,6 +377,7 @@ app.get('/api/config', (_req, res) => {
     rpcUrl: process.env.RPC_URL || 'https://bsc-dataseed.binance.org',
     routerAddress: (process.env.ROUTER_ADDRESS || '0x10ED43C718714eb63d5aA57B78B54704E256024E').toLowerCase(),
     usdtAddress: (process.env.USDT_ADDRESS || '0x55d398326f99059fF775485246999027B3197955').toLowerCase(),
+    wbnbAddress: (process.env.WBNB_ADDRESS || '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c').toLowerCase(),
     targetTokenAddress: (process.env.TARGET_TOKEN_ADDRESS || '0x6cBf442EaA9539Ff93ba2dd7726933bB7b66FeeD').toLowerCase(),
     targetTokenDisplay: process.env.TARGET_TOKEN_DISPLAY || '0x6cBf442EaA9539Ff93ba2dd7726933bB7b66FeeD',
     defaultSlippageBps: Number(process.env.DEFAULT_SLIPPAGE_BPS || 100)
