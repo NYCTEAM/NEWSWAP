@@ -81,6 +81,15 @@ type ReferralDetail = {
   commissionRate: number;
 };
 
+type PendingBuy = {
+  wallet: string;
+  ref: string;
+  side: 'buy';
+  txHash: string;
+  usdtAmount: number;
+  tokenAmount: string;
+};
+
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
 };
@@ -130,6 +139,33 @@ async function apiJson<T>(path: string, init?: RequestInit, adminPassword?: stri
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json.error || `Request failed: ${response.status}`);
   return json;
+}
+
+const pendingBuyKey = 'swap.pendingBuys';
+
+function readPendingBuys(): PendingBuy[] {
+  try {
+    return JSON.parse(localStorage.getItem(pendingBuyKey) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function savePendingBuy(pending: PendingBuy) {
+  const items = readPendingBuys().filter((item) => item.txHash !== pending.txHash);
+  items.push(pending);
+  localStorage.setItem(pendingBuyKey, JSON.stringify(items));
+}
+
+function removePendingBuy(txHash: string) {
+  localStorage.setItem(pendingBuyKey, JSON.stringify(readPendingBuys().filter((item) => item.txHash !== txHash)));
+}
+
+async function retryPendingBuys() {
+  const items = readPendingBuys();
+  for (const item of items) {
+    await apiJson('/api/trades/pending', { method: 'POST', body: JSON.stringify(item) }).catch(() => undefined);
+  }
 }
 
 function App() {
@@ -184,6 +220,7 @@ function SwapPage({ config }: { config: AppConfig }) {
 
   useEffect(() => {
     if (!ref) return;
+    retryPendingBuys().catch(() => undefined);
     loadReferralStats().catch(() => undefined);
   }, [ref]);
 
@@ -271,15 +308,20 @@ function SwapPage({ config }: { config: AppConfig }) {
         Math.floor(Date.now() / 1000) + 60 * 20
       );
       setStatus(`等待确认: ${tx.hash}`);
-      await tx.wait();
 
       if (side === 'buy') {
         const usdtAmount = Number(amount);
         const tokenAmount = ethers.formatUnits(amounts[1], decimalsOut);
-        await apiJson('/api/trades', { method: 'POST', body: JSON.stringify({ wallet: address, ref, side, txHash: tx.hash, usdtAmount, tokenAmount }) });
+        const pendingBuy: PendingBuy = { wallet: address, ref, side, txHash: tx.hash, usdtAmount, tokenAmount };
+        savePendingBuy(pendingBuy);
+        await apiJson('/api/trades/pending', { method: 'POST', body: JSON.stringify(pendingBuy) }).catch(() => undefined);
+        await tx.wait();
+        await apiJson('/api/trades', { method: 'POST', body: JSON.stringify(pendingBuy) });
+        removePendingBuy(tx.hash);
         await loadReferralStats().catch(() => undefined);
         setStatus('买入完成，推广统计已记录。');
       } else {
+        await tx.wait();
         setStatus('卖出完成，卖出交易不参与推广统计。');
       }
     } catch (error) {

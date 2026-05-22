@@ -127,11 +127,79 @@ async function getPairContext() {
 
 function tradeVolume(trade) {
   if (trade.side !== 'buy') return 0;
+  if (trade.status && trade.status !== 'confirmed') return 0;
   return Number(trade.usdtAmount || 0);
 }
 
 function isTradeSettled(db, tradeId) {
   return db.settlements.some((settlement) => Array.isArray(settlement.tradeIds) && settlement.tradeIds.includes(tradeId));
+}
+
+async function settlePendingTrades(db) {
+  const pending = db.trades.filter((trade) => trade.status === 'pending').slice(0, 50);
+  if (pending.length === 0) return { checked: 0, confirmed: 0, failed: 0 };
+  const { provider } = await getPairContext();
+  const blockTimeCache = new Map();
+  let confirmed = 0;
+  let failed = 0;
+
+  for (const trade of pending) {
+    try {
+      const receipt = await provider.getTransactionReceipt(trade.txHash);
+      if (!receipt) continue;
+      if (receipt.status === 1) {
+        trade.status = 'confirmed';
+        trade.confirmedAt = nowIso();
+        trade.blockNumber = Number(receipt.blockNumber);
+        let blockTime = blockTimeCache.get(receipt.blockNumber);
+        if (!blockTime) {
+          const block = await provider.getBlock(receipt.blockNumber);
+          blockTime = Number(block?.timestamp || 0) * 1000;
+          blockTimeCache.set(receipt.blockNumber, blockTime);
+        }
+        if (blockTime) trade.createdAt = new Date(blockTime).toISOString();
+        confirmed += 1;
+      } else if (receipt.status === 0) {
+        trade.status = 'failed';
+        trade.failedAt = nowIso();
+        failed += 1;
+      }
+    } catch (error) {
+      trade.lastReceiptError = error.message;
+    }
+  }
+
+  return { checked: pending.length, confirmed, failed };
+}
+
+async function readSettledDb() {
+  const db = await readDb();
+  const pending = await settlePendingTrades(db);
+  if (pending.confirmed > 0 || pending.failed > 0) await writeDb(db);
+  return db;
+}
+
+function upsertTrade(db, input, status) {
+  const existing = db.trades.find((item) => item.txHash === input.txHash);
+  if (existing) {
+    Object.assign(existing, input, {
+      status,
+      updatedAt: nowIso(),
+      confirmedAt: status === 'confirmed' ? nowIso() : existing.confirmedAt
+    });
+    return { trade: existing, created: false };
+  }
+
+  const trade = {
+    id: randomUUID(),
+    ...input,
+    status,
+    createdAt: input.createdAt || nowIso(),
+    updatedAt: nowIso(),
+    confirmedAt: status === 'confirmed' ? nowIso() : undefined
+  };
+  db.trades.push(trade);
+  return { trade, created: true };
 }
 
 async function syncReferralBuys(db, code) {
@@ -317,7 +385,7 @@ app.get('/api/config', (_req, res) => {
 
 app.get('/api/referrals', async (req, res, next) => {
   try {
-    const db = await readDb();
+    const db = await readSettledDb();
     res.json({ referrals: db.referrals.map((referral) => publicReferral(normalizeReferral(referral), req)) });
   } catch (error) {
     next(error);
@@ -373,7 +441,7 @@ app.get('/api/referral-wallet-stats', async (req, res, next) => {
     if (!/^0x[a-f0-9]{40}$/.test(wallet)) return res.status(400).json({ error: 'Invalid wallet' });
     if (!ref) return res.status(400).json({ error: 'Missing ref' });
 
-    const db = await readDb();
+    const db = await readSettledDb();
     if (!db.referrals.some((item) => item.code === ref)) return res.status(404).json({ error: 'Referral not found' });
     const trades = db.trades.filter((trade) => trade.ref === ref && trade.wallet === wallet && trade.side === 'buy');
     const totalBuyUsdt = trades.reduce((sum, trade) => sum + tradeVolume(trade), 0);
@@ -401,7 +469,7 @@ app.get('/api/referral-public-stats', async (req, res, next) => {
     const ref = String(req.query.ref || '').trim().toLowerCase();
     if (!ref) return res.status(400).json({ error: 'Missing ref' });
 
-    const db = await readDb();
+    const db = await readSettledDb();
     const referral = db.referrals.find((item) => item.code === ref);
     if (!referral) return res.status(404).json({ error: 'Referral not found' });
 
@@ -436,14 +504,37 @@ app.post('/api/trades', async (req, res, next) => {
 
     const db = await readDb();
     if (!db.referrals.some((item) => item.code === ref)) return res.status(404).json({ error: 'Referral not found' });
-    if (db.trades.some((item) => item.txHash === txHash)) return res.status(409).json({ error: 'Trade already recorded' });
 
     const binding = db.walletBindings.find((item) => item.wallet === wallet);
     const tradeRef = binding?.ref || ref;
-    const trade = { id: randomUUID(), ref: tradeRef, wallet, side, txHash, usdtAmount, tokenAmount, createdAt: nowIso() };
-    db.trades.push(trade);
+    const { trade, created } = upsertTrade(db, { ref: tradeRef, wallet, side, txHash, usdtAmount, tokenAmount }, 'confirmed');
     await writeDb(db);
-    res.status(201).json({ trade });
+    res.status(created ? 201 : 200).json({ trade });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/trades/pending', async (req, res, next) => {
+  try {
+    const wallet = normalizeAddress(req.body.wallet);
+    const ref = String(req.body.ref || '').trim().toLowerCase();
+    const side = req.body.side === 'sell' ? 'sell' : 'buy';
+    const txHash = String(req.body.txHash || '').trim().toLowerCase();
+    const usdtAmount = Number(req.body.usdtAmount || 0);
+    const tokenAmount = String(req.body.tokenAmount || '0');
+
+    if (!/^0x[a-f0-9]{40}$/.test(wallet)) return res.status(400).json({ error: 'Invalid wallet' });
+    if (!/^0x[a-f0-9]{64}$/.test(txHash)) return res.status(400).json({ error: 'Invalid txHash' });
+    if (!Number.isFinite(usdtAmount) || usdtAmount <= 0) return res.status(400).json({ error: 'Invalid usdtAmount' });
+
+    const db = await readDb();
+    if (!db.referrals.some((item) => item.code === ref)) return res.status(404).json({ error: 'Referral not found' });
+    const binding = db.walletBindings.find((item) => item.wallet === wallet);
+    const tradeRef = binding?.ref || ref;
+    const { trade, created } = upsertTrade(db, { ref: tradeRef, wallet, side, txHash, usdtAmount, tokenAmount }, 'pending');
+    await writeDb(db);
+    res.status(created ? 201 : 200).json({ trade });
   } catch (error) {
     next(error);
   }
@@ -451,7 +542,7 @@ app.post('/api/trades', async (req, res, next) => {
 
 app.get('/api/stats', async (_req, res, next) => {
   try {
-    const db = await readDb();
+    const db = await readSettledDb();
     res.json({
       summary: summarize(db),
       walletBindings: db.walletBindings,
@@ -466,7 +557,7 @@ app.get('/api/stats', async (_req, res, next) => {
 
 app.get('/api/referrals/:code/detail', async (req, res, next) => {
   try {
-    const db = await readDb();
+    const db = await readSettledDb();
     const code = String(req.params.code || '').trim().toLowerCase();
     const detail = referralDetail(db, code);
     if (!detail) return res.status(404).json({ error: 'Referral not found' });
