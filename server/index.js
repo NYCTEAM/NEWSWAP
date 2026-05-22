@@ -580,6 +580,32 @@ app.post('/api/referrals/:code/sync', requireAdmin, async (req, res, next) => {
   }
 });
 
+app.post('/api/sync-all', requireAdmin, async (_req, res, next) => {
+  try {
+    const db = await readDb();
+    const pending = await settlePendingTrades(db);
+    const results = [];
+    for (const referral of db.referrals) {
+      const code = String(referral.code || '').trim().toLowerCase();
+      if (!code) continue;
+      try {
+        const sync = await syncReferralBuys(db, code);
+        results.push({ code, ...sync });
+      } catch (error) {
+        results.push({ code, added: 0, error: error.message });
+      }
+    }
+    await writeDb(db);
+    res.json({
+      pending,
+      results,
+      totalAdded: results.reduce((sum, item) => sum + Number(item.added || 0), 0)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/referrals/:code/settlements', requireAdmin, async (req, res, next) => {
   try {
     const db = await readDb();

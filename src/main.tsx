@@ -405,13 +405,33 @@ function AdminPage() {
     }
   }
 
+  async function syncAllReferrals() {
+    const password = window.prompt('请输入管理员密码，同步所有推荐链接旧记录');
+    if (!password) return;
+    try {
+      setStatus('正在同步所有推荐链接旧记录，请稍等...');
+      const result = await apiJson<{ totalAdded?: number; pending?: { confirmed?: number; failed?: number } }>(
+        '/api/sync-all',
+        { method: 'POST', body: JSON.stringify({}) },
+        password.trim()
+      );
+      await refresh();
+      setStatus(`同步完成，新增 ${result.totalAdded || 0} 笔买入，确认 pending ${result.pending?.confirmed || 0} 笔，失败 ${result.pending?.failed || 0} 笔。`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '同步失败');
+    }
+  }
+
   const referralByCode = useMemo(() => new Map(referrals.map((item) => [item.code, item])), [referrals]);
 
   return (
     <main className="admin-shell">
       <section className="admin-head">
         <div><p className="eyebrow">Referral dashboard</p><h1>推广统计后台</h1></div>
-        <button className="icon-text" onClick={() => refresh()}><RefreshCcw size={18} />刷新</button>
+        <div className="head-actions">
+          <button className="icon-text" onClick={syncAllReferrals}>同步旧记录</button>
+          <button className="icon-text" onClick={() => refresh()}><RefreshCcw size={18} />刷新</button>
+        </div>
       </section>
 
       <section className="admin-grid">
