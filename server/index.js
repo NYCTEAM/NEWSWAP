@@ -404,13 +404,6 @@ app.get('/api/referral-public-stats', async (req, res, next) => {
     const db = await readDb();
     const referral = db.referrals.find((item) => item.code === ref);
     if (!referral) return res.status(404).json({ error: 'Referral not found' });
-    let sync = { added: 0 };
-    try {
-      sync = await syncReferralBuys(db, ref);
-      if (sync.added > 0) await writeDb(db);
-    } catch (error) {
-      sync = { added: 0, error: error.message };
-    }
 
     const trades = db.trades.filter((trade) => trade.ref === ref && trade.side === 'buy');
     const buyerWallets = new Set(trades.map((trade) => trade.wallet));
@@ -421,8 +414,7 @@ app.get('/api/referral-public-stats', async (req, res, next) => {
       name: referral.name,
       buyerCount: buyerWallets.size,
       buyCount: trades.length,
-      totalBuyUsdt,
-      sync
+      totalBuyUsdt
     });
   } catch (error) {
     next(error);
@@ -476,16 +468,22 @@ app.get('/api/referrals/:code/detail', async (req, res, next) => {
   try {
     const db = await readDb();
     const code = String(req.params.code || '').trim().toLowerCase();
-    let sync = { added: 0 };
-    try {
-      sync = await syncReferralBuys(db, code);
-      if (sync.added > 0) await writeDb(db);
-    } catch (error) {
-      sync = { added: 0, error: error.message };
-    }
     const detail = referralDetail(db, code);
     if (!detail) return res.status(404).json({ error: 'Referral not found' });
-    res.json({ ...detail, commissionRate, sync });
+    res.json({ ...detail, commissionRate });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/referrals/:code/sync', requireAdmin, async (req, res, next) => {
+  try {
+    const db = await readDb();
+    const code = String(req.params.code || '').trim().toLowerCase();
+    if (!db.referrals.some((item) => item.code === code)) return res.status(404).json({ error: 'Referral not found' });
+    const sync = await syncReferralBuys(db, code);
+    await writeDb(db);
+    res.json({ sync, detail: referralDetail(db, code) });
   } catch (error) {
     next(error);
   }

@@ -502,6 +502,24 @@ function AdminDetailPage({ code }: { code: string }) {
     }
   }
 
+  async function syncMissingBuys() {
+    if (!detail) return;
+    const password = window.prompt('请输入管理员密码补扫链上漏单');
+    if (!password) return;
+    try {
+      setStatus('正在补扫链上买入记录，请稍等...');
+      const result = await apiJson<{ sync?: { added?: number } }>(
+        `/api/referrals/${encodeURIComponent(detail.referral.code)}/sync`,
+        { method: 'POST', body: JSON.stringify({}) },
+        password.trim()
+      );
+      await loadDetail();
+      setStatus(`补扫完成，新增 ${result.sync?.added || 0} 笔买入记录。`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '补扫失败');
+    }
+  }
+
   const summary = detail?.summary;
 
   return (
@@ -532,7 +550,10 @@ function AdminDetailPage({ code }: { code: string }) {
         <section className="admin-card full compact-card">
           <div className="detail-head">
             <h2>统计分类</h2>
-            <button className="icon-text" onClick={settleSelected}>结算本轮 1%</button>
+            <div className="head-actions">
+              <button className="icon-text" onClick={syncMissingBuys}>补扫漏单</button>
+              <button className="icon-text" onClick={settleSelected}>结算本轮 1%</button>
+            </div>
           </div>
           <div className="metric-grid">
             <Metric label="推荐人数" value={`${summary.wallets}`} />
